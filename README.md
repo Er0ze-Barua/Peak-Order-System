@@ -32,45 +32,45 @@ In traditional monolithic architectures, incoming order requests directly perfor
 
 ```mermaid
 flowchart TD
-    Client(["📱 Client / Locust Traffic Swarm"]) -->|POST /place_order| API["🚀 FastAPI Gateway"]
+    Client(["📱 Client / Locust Traffic Swarm"]) -->|"POST /place_order"| API["🚀 FastAPI Gateway"]
 
     subgraph Redis_Layer ["⚡ Redis In-Memory Gatekeeping & Buffering"]
         direction TB
-        Blacklist{"1. User Blacklisted?<br/>(SISMEMBER)"}
-        Idempotency{"2. Duplicate Request?<br/>(SET NX EX 5s)"}
-        Inventory{"3. In Stock?<br/>(DECR / INCR rollback)"}
+        Blacklist{"1. User Blacklisted?<br/>SISMEMBER"}
+        Idempotency{"2. Duplicate Request?<br/>SET NX EX 5s"}
+        Inventory{"3. In Stock?<br/>DECR / INCR rollback"}
         Router{"4. Route by Tier"}
         VIPQueue[("👑 queue:vip")]
         RegQueue[("📦 queue:regular")]
         DLQ[("⚠️ queue:dead_letter")]
 
-        Blacklist -->|Yes| R403["403 Forbidden"]
-        Blacklist -->|No| Idempotency
-        Idempotency -->|Key Exists| R429["429 Too Many Requests"]
-        Idempotency -->|New Request| Inventory
-        Inventory -->|Count < 0| R400["400 Out of Stock"]
-        Inventory -->|Available| Router
-        Router -->|is_vip = True| VIPQueue
-        Router -->|is_vip = False| RegQueue
+        Blacklist -->|"Yes"| R403["403 Forbidden"]
+        Blacklist -->|"No"| Idempotency
+        Idempotency -->|"Key Exists"| R429["429 Too Many Requests"]
+        Idempotency -->|"New Request"| Inventory
+        Inventory -->|"Count < 0"| R400["400 Out of Stock"]
+        Inventory -->|"Available"| Router
+        Router -->|"is_vip = True"| VIPQueue
+        Router -->|"is_vip = False"| RegQueue
     end
 
     API --> Blacklist
-    Router -->|200 OK 'order_placed'| API
+    Router -->|"200 OK: order_placed"| API
 
     subgraph Worker_Layer ["⚙️ Asynchronous Processing"]
-        Worker["👷 Background Worker (worker.py)<br/>BRPOP [queue:vip, queue:regular]"]
-        VIPQueue -.->|High Priority| Worker
-        RegQueue -.->|Normal Priority| Worker
+        Worker["👷 Background Worker: worker.py<br/>BRPOP Priority Queues"]
+        VIPQueue -.->|"High Priority"| Worker
+        RegQueue -.->|"Normal Priority"| Worker
     end
 
     subgraph Storage_Layer ["💾 Persistence & Resilience"]
-        Postgres[("🐘 PostgreSQL (orders table)")]
-        Recovery["🔄 DLQ Recovery Cron (recover_dlq.py)<br/>Probes DB ('SELECT 1') & Drains DLQ"]
+        Postgres[("🐘 PostgreSQL: orders table")]
+        Recovery["🔄 DLQ Recovery: recover_dlq.py<br/>Probes DB and Drains DLQ"]
         
-        Worker -->|Transactional INSERT| Postgres
-        Worker -.->|On DB Exception| DLQ
-        Recovery -->|Polls DLQ (RPOP)| DLQ
-        Recovery -->|Rescues Orders| Postgres
+        Worker -->|"Transactional INSERT"| Postgres
+        Worker -.->|"On DB Exception"| DLQ
+        Recovery -->|"Polls DLQ via RPOP"| DLQ
+        Recovery -->|"Rescues Orders"| Postgres
     end
 ```
 
