@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  support_api:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      - support_db
+      - support_redis
+    volumes:
+      - ./app:/workspace/app
+
+  support_db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secretpassword
+      POSTGRES_DB: tickets_db
+    ports:
+      - "5433:5432"
+
+  support_redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
