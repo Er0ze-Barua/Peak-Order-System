@@ -1,4 +1,4 @@
-# ⚡ Peak Order System — High-Throughput & Fault-Tolerant Order Ingestion Engine
+# ⚡ Peak Order System: High-Throughput & Fault-Tolerant Order Ingestion Engine
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688.svg)](https://fastapi.tiangolo.com/)
@@ -7,7 +7,7 @@
 [![Locust](https://img.shields.io/badge/Tested%20With-Locust-00C853.svg)](https://locust.io/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED.svg)](https://www.docker.com/)
 
-A distributed, asynchronous, and fault-tolerant backend system engineered to withstand sudden traffic avalanches (flash sales, peak-hour meal rushes, concert drops) without database connection exhaustion, race conditions, or order loss.
+A distributed, asynchronous backend built to handle sudden traffic spikes (flash sales, peak-hour meal rushes, concert drops) without exhausting database connections, and without dropping orders when PostgreSQL is unavailable.
 
 ---
 
@@ -21,10 +21,10 @@ In traditional monolithic architectures, incoming order requests directly perfor
 
 ### The Peak-Order Solution
 **Peak Order System** decouples **order ingestion** from **database persistence** using an in-memory cache-first architecture:
-1. **Sub-millisecond Ingestion:** The FastAPI gateway offloads all high-frequency operations (blacklist checks, request deduplication, atomic inventory tracking) to in-memory Redis data structures.
+1. **Fast Ingestion:** The FastAPI gateway offloads all high-frequency operations (blacklist checks, request deduplication, atomic inventory tracking) to in-memory Redis data structures.
 2. **Traffic Leveling (Rate Absorber):** Orders are pushed to prioritized Redis queues, immediately returning a receipt to the client.
 3. **Controlled Persistence:** Dedicated background workers drain the queues and write to PostgreSQL at a sustainable, governed ingestion rate.
-4. **Zero Data Loss (Self-Healing DLQ):** If the primary database fails or becomes unreachable, orders are routed to a Dead Letter Queue (DLQ) and automatically drained and rescued once the database recovers.
+4. **Dead Letter Queue (DLQ) for outages:** If the primary database fails or becomes unreachable, orders are routed to a Dead Letter Queue and replayed once the database recovers.
 
 ---
 
@@ -78,7 +78,7 @@ flowchart TD
 
 ## 🎯 Key Engineering Highlights
 
-### 1. Atomic Concurrency Control (Zero Overselling)
+### 1. Atomic Inventory Control
 Handling inventory in PostgreSQL with `SELECT ... FOR UPDATE` causes severe row lock contention under concurrent load. Peak Order leverages Redis's single-threaded atomic command execution:
 ```python
 item_left = redis_client.decr(inventory_key)
@@ -86,7 +86,7 @@ if item_left < 0:
     redis_client.incr(inventory_key)  # Compensating rollback transaction
     raise HTTPException(status_code=400, detail="item out of stock")
 ```
-No two requests can decrement the same unit twice, guaranteeing physical impossibility of overselling with $O(1)$ latency.
+Because each decrement is a single atomic Redis command, two concurrent requests cannot both claim the same last unit. The check runs in constant time per request.
 
 ### 2. Distributed Idempotency Lock
 To protect against user double-taps, network retries, and automated bot scripts:
@@ -104,8 +104,8 @@ result = redis_client.brpop(["queue:vip", "queue:regular"], timeout=1)
 ```
 As long as `queue:vip` has pending items, the worker will **never** touch `queue:regular`, ensuring low SLA guarantees for high-value orders.
 
-### 4. Dead Letter Queue (DLQ) & Self-Healing Event Replay
-Network partitions or database crashes do not result in dropped orders:
+### 4. Dead Letter Queue (DLQ) & Replay
+Orders that fail to write during a network partition or database crash are kept in the DLQ instead of being lost:
 * If PostgreSQL rejects a write, the worker executes `db.rollback()` and deposits the order into `queue:dead_letter`.
 * A background recovery agent ([recover_dlq.py](app/recover_dlq.py)) periodically health-checks PostgreSQL (`SELECT 1`).
 * Once the database recovers, it drains the DLQ in FIFO order and commits the rescued orders to disk.
@@ -119,19 +119,19 @@ The system was subjected to sustained high-concurrency traffic simulation using 
 ### Test Configuration
 * **Total Simulated Users:** 100 concurrent users
 * **Spawn Rate:** 10 users/second
-* **User Wait Time:** 100ms – 500ms (hyper-rapid clicking)
+* **User Wait Time:** 100ms - 500ms (hyper-rapid clicking)
 * **Payload Scope:** Dynamic randomization across 4 menu items, prices, user IDs, and VIP statuses.
 
 ### Benchmark Results
 | Metric | Result | Engineering Impact |
 |:---|:---|:---|
 | **Total Requests Handled** | **23,688** | High volume processed without memory leaks or crashes |
-| **Peak Throughput** | **153.9 RPS** | **~554,000 orders/hour** capacity on local commodity hardware |
-| **Median Latency (p50)** | **290 ms** | Consistent sub-300ms response time under peak pressure |
+| **Peak Throughput** | **153.9 RPS** | **~554,000 orders/hour** at this test rate on local hardware |
+| **Median Latency (p50)** | **290 ms** | Median response under 300 ms at peak load |
 | **90th Percentile (p90)** | **400 ms** | Tight latency curve with minimal queuing drift |
 | **99th Percentile (p99)** | **530 ms** | Minimal tail latency under full concurrency |
 | **Min / Max Latency** | **13 ms / 857 ms** | Fast paths executed in low double-digit ms |
-| **Total Failure Rate** | **0.05%** (12 / 23,688) | **Zero database crashes**. All 12 rejections were `HTTP 429` locks protecting the gateway |
+| **Total Failure Rate** | **0.05%** (12 / 23,688) | **No database crashes observed during the run**. All 12 rejections were `HTTP 429` locks protecting the gateway |
 
 ---
 
